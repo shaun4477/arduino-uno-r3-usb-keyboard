@@ -1,0 +1,9 @@
+.*.swp
+VirtualSerialAndKeyboard.bin
+VirtualSerialAndKeyboard.eep
+VirtualSerialAndKeyboard.elf
+VirtualSerialAndKeyboard.lss
+VirtualSerialAndKeyboard.map
+VirtualSerialAndKeyboard.sym
+obj/
+original-uno-atmega16u2-firmware.hex
