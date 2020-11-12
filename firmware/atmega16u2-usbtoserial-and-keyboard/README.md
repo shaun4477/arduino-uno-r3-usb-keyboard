@@ -52,7 +52,7 @@ To load on the atmega16u2
 - Install dfu-programmer (on Mac with homebrew installed you can just use
 `brew install dfu-programmer`)
 
-- Reset the chip in to bootloader mode by shorting (with a wire)) the two
+- Reset the chip in to bootloader mode by shorting (with a wire) the two
 pins on the Arduino closest to the USB connector and the red reset button
 
 - Erase the current firmware

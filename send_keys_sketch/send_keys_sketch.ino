@@ -70,10 +70,8 @@ void loop() {
       sendString("Hello");  
     }
 
-    if (serialConsoleConnected) {
-      Serial.print("button:");   
-      Serial.println(buttonNew);    
-    }
+    Serial.print("button:");   
+    Serial.println(buttonNew);    
  
     buttonLast = buttonNew;
   }
