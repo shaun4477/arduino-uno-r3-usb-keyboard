@@ -55,6 +55,11 @@ To load on the atmega16u2
 - Reset the chip in to bootloader mode by shorting (with a wire) the two
 pins on the Arduino closest to the USB connector and the red reset button
 
+- Backup the old firmware from your Arduino so you can restore it if 
+you need to 
+
+`dfu-programmer atmega16u2 read > old-fw.hex`
+
 - Erase the current firmware
 
 `dfu-programmer atmega16u2 erase`

@@ -90,7 +90,12 @@ volatile struct
 } PulseMSRemaining;
 
 #define TX_RX_LED_PULSE_TICKS 3
-#define PULSE
+
+/** Toggle the RX LED periodically after X USB message processing loops. Used to show that USB messages
+* are still being processed */
+#define USB_TASK_FLASH_RX_LED 20000 
+
+// #define PULSE
 
 /** Circular buffer to hold data to be sent from the Keyboard HID to the host */
 static RingBuffer_t Keyboard_Buffer;
@@ -175,6 +180,10 @@ int main(void)
 	RingBuffer_InitBuffer(&Keyboard_Buffer,   Keyboard_Buffer_Data,   sizeof(Keyboard_Buffer_Data));
 
 	GlobalInterruptEnable();
+
+#ifdef USB_TASK_FLASH_RX_LED
+	uint16_t UsbProcessed = 0;
+#endif
 
 	for (;;)
 	{
@@ -278,6 +287,14 @@ int main(void)
 		CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
 		HID_Device_USBTask(&Keyboard_HID_Interface);
 		USB_USBTask();
+
+#ifdef USB_TASK_FLASH_RX_LED
+		UsbProcessed++;
+		if (UsbProcessed >= USB_TASK_FLASH_RX_LED) {
+			LEDs_ToggleLEDs(LEDMASK_RX);
+			UsbProcessed = 0;
+		}
+#endif
 	}
 }
 
