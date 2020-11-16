@@ -3,103 +3,300 @@
   on the atmega16u2 in the Arduino Uno R3 to both have a serial console 
   that can be used in sketches and to load new sketches from the Arduino 
   IDE as well as sending keyboard codes via the USB Keyboard HID 
+
+  This sketch allows you to program input pins 2-7 so that when they
+  are pulled to ground they will send up to 64 keystrokes via USB 
+  HID. By default input pin 7 will send the string 'Hello World!'
 */
 
+#include <EEPROM.h>
+#include "eeprom_config.h"
+#include "keyboard_hid_data.h"
+#include "keyboard_hid_defines.h"
+
 char inChar;        // character received from serial port
-int counter = 0;  
 
-int buttonPin = 7;  // pin that will trigger a keyboard event when sent low
-int buttonLast = 1; // last state of the button used to trigger on transition
-
-/* Keyboard messages are inline with the serial connection, a 4 byte 
- * sentinel followed by 1 byte of modifiers, 2 bytes of keys then 
- * 1 byte of checksum
- */
-byte message[] = {0xC0, 0x6C, 0x57, 0xCC, 0x00, 0x00, 0x00, 0x00};
-
-/* Defines used to send various HID keystrokes */
-#define HID_KEYBOARD_MODIFIER_LEFTGUI                     (1 << 3)
-#define HID_KEYBOARD_MODIFIER_LEFTSHIFT                   (1 << 1)
-#define HID_KEYBOARD_SC_LEFT_GUI                          0xE3
-#define HID_KEYBOARD_SC_LEFT_SHIFT                        0xE1
-#define HID_KEYBOARD_SC_A                                 0x04
-#define HID_KEYBOARD_SC_0_AND_CLOSING_PARENTHESIS         0x27
-#define HID_KEYBOARD_SC_1_AND_EXCLAMATION                 0x1E
-#define HID_KEYBOARD_SC_SPACE                             0x2C
+static char *all_major_char_str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#%^&*!*()\t -_=+[]{}\\|`~;:'\",.<>/?";
 
 void setup() {
   Serial.begin(9600);                 // initialize serial port and set baud rate to 9600
 
-  pinMode(buttonPin, INPUT_PULLUP);
-
+  Serial.println(F("Arduino keyboard sender (https://github.com/shaun4477/arduino-uno-r3-usb-keyboard)"));
+  readAndProcessConfig();
+    
   delay(100);
-  Serial.println("Arduino keyboard sender ready");
 }
 
-void sendString(unsigned char *str) {
-  while (unsigned char p = *str++) {
-    if (p >= 'A' && p <= 'Z')
-      sendKey(HID_KEYBOARD_MODIFIER_LEFTSHIFT, HID_KEYBOARD_SC_A + (p - 'A'), 0x0);
-    else if (p >= 'a' && p <= 'z') 
-      sendKey(0x0, HID_KEYBOARD_SC_A + (p - 'a'), 0x0);
-    else if (p == '0')
-      sendKey(0x0, HID_KEYBOARD_SC_0_AND_CLOSING_PARENTHESIS, 0x0);
-    else if (p >= '1' && p <= '9')
-      sendKey(0x0, HID_KEYBOARD_SC_1_AND_EXCLAMATION + (p - '1'), 0x0);
-    else if (p == ' ')
-      sendKey(0x0, HID_KEYBOARD_SC_SPACE, 0x0);
-    else 
-      sendKey(0x0, HID_KEYBOARD_SC_A, 0x0);    
+/* Dump the ascii to keyboard HID event map */
+void printAsciiToKey() {
+  for (uint8_t i = 0; i < strlen(all_major_char_str); i++) {
+    uint8_t modifier = 0;
+    uint8_t code = asciiToKey(all_major_char_str[i], &modifier);
+    Serial.print("Character '");
+    Serial.print(all_major_char_str[i]);
+    Serial.print("' = ");
+    Serial.print(code, HEX);
+    Serial.print(" modifier = ");
+    Serial.print(modifier);
+    Serial.println("");
   }
 }
 
-void sendKey(uint8_t modifier, uint8_t key, uint8_t key2) {
-  message[4] = modifier;
-  message[5] = key;
-  message[6] = key2;
-  message[7] = message[0] ^ message[1] ^ message[2] ^ message[3] ^ 
-               message[4] ^ message[5] ^ message[6];
-  Serial.write(message, sizeof(message));
+void serialPrintHex(long num) {
+  if (num < 16) 
+    Serial.print("0");
+  Serial.print(num, HEX);
+}
+
+/* Send all major keys to the keyboard USB device */
+void sendAllMajorKeys() {
+  for (uint8_t i = 0; i < strlen(all_major_char_str); i++) {
+    uint8_t chr = all_major_char_str[i];
+
+    // Don't send these two as they may cause the serial monitor to re-trigger
+    if (chr == '\n' || chr == '\t')
+      continue;
+      
+    uint8_t modifier = 0;
+    uint8_t code = asciiToKey(all_major_char_str[i], &modifier);
+    sendKey(modifier, code, 0x0);
+    delay(100);
+  }
 }
 
 void loop() {  
-  uint8_t buttonNew = digitalRead(buttonPin);
-  if (buttonNew != buttonLast) {
-    
-    if (buttonNew == 0) {
-      sendString("Hello");  
-    }
+  for (uint8_t pin = FIRST_INPUT_PIN; pin <= LAST_INPUT_PIN; pin++) {
+    if (!WATCH_PIN(pin))
+      continue;
 
-    Serial.print("button:");   
-    Serial.println(buttonNew);    
- 
-    buttonLast = buttonNew;
+    uint8_t pinChanged, pinValue;
+    pinChanged = checkPinChange(pin, &pinValue);
+
+    if (!pinChanged)
+      continue;
+    
+    Serial.print("Pin ");
+    Serial.print(pin);
+    Serial.print(" change: ");   
+    Serial.println(pinValue);   
+
+    uint16_t eepromOffset = EEPROM_OFFSET(pin);
+    
+    if (!pinValue) {
+      for (uint8_t keystrokeIdx = 0; keystrokeIdx < MAX_KEYSTROKES; keystrokeIdx++) {
+        uint8_t modifier = EEPROM.read(eepromOffset + (keystrokeIdx * 2));
+        uint8_t code     = EEPROM.read(eepromOffset + (keystrokeIdx * 2) + 1);
+        
+        if (!code)
+          break;
+
+        Serial.print("Send key ");
+        serialPrintHex(modifier);
+        Serial.print(" ");
+        serialPrintHex(code);
+        Serial.println("");
+        
+        sendKey(modifier, code, 0x0);
+      }
+    }
   }
-      
-  delay(50);                // wait 3000ms to avoid cycling too fast
-  counter++;                  // variable "counter" increases 1
+  delay(5);
 }
 
+#define SERIAL_TIMEOUT_MS 500
+
+int serialTimedPeek() {
+  int c;
+  unsigned long _startMillis; 
+  
+  _startMillis = millis();
+  do {
+    if (Serial.available()) {
+      c = Serial.peek();
+      return c;
+    }
+  } while(millis() - _startMillis < SERIAL_TIMEOUT_MS);
+  return -1;     // -1 indicates timeout
+}
+
+int serialTimedSkipWhitespace(char *terminator) {
+  while (1) {
+    char nextChar = serialTimedPeek();
+    if (nextChar == -1)
+      return -1;
+    else if (nextChar == ' ' || nextChar == '\t')
+      Serial.read();
+    else {
+      if (terminator)
+        *terminator = nextChar;
+      return 0;
+    }
+  }  
+}
+
+int serialTimedReadNum(uint8_t *out, char *terminator, bool hex) {
+  bool firstChar = true; 
+  
+  if (serialTimedSkipWhitespace(NULL) == -1) {
+    Serial.println("Timeout 2");
+    return -1;
+  }
+
+  *out = 0;
+
+  while (1) {
+    char nextChar = serialTimedPeek();
+    if (nextChar == -1) {
+      return -1;
+    }
+
+    uint8_t charVal;
+
+    if (nextChar >= '0' && nextChar <= '9')
+      charVal = nextChar - '0';
+    else if (hex && nextChar >= 'a' && nextChar <= 'f')
+      charVal = nextChar - 'a' + 10;
+    else if (hex && nextChar >= 'A' && nextChar <= 'F')
+      charVal = nextChar - 'A' + 10;
+    else {
+      if (firstChar)
+        return -1;
+      *terminator = nextChar;
+      return 0;
+    }
+
+    Serial.read();
+
+    *out *= hex ? 16 : 10;
+    *out += charVal;
+    firstChar = false;
+  }  
+}
+
+int readPinUpdate() {
+  uint8_t pin;
+  int rc;
+  char terminator;
+  
+  if (rc = serialTimedReadNum(&pin, &terminator, false) || terminator != ' ') {
+    Serial.println("Invalid pin"); 
+    return -1; 
+  }
+
+  if (pin < 0 || pin < FIRST_INPUT_PIN || pin > LAST_INPUT_PIN) {
+    Serial.print("Invalid input pin ");
+    Serial.print(pin);
+    Serial.println("");
+    return -1;
+  }
+
+  Serial.print("Updating pin ");
+  Serial.println(pin);
+
+  uint8_t keystrokeIdx = 0;
+  while (keystrokeIdx < MAX_KEYSTROKES - 1) {
+    uint8_t modifier, keycode;
+
+    rc = serialTimedSkipWhitespace(&terminator);
+    if (rc) {
+      Serial.println("Timeout looking for modifier");
+      return -1;
+    } else if (terminator == ';') {
+      Serial.read();
+      break;      
+    }
+
+    rc = serialTimedReadNum(&modifier, &terminator, true);
+    if (rc) {
+      Serial.println("Timeout reading modifier");
+      return;
+    } else if (terminator != ' ') {
+      Serial.println("No space after modifier");
+      return -1;      
+    }
+
+    rc = serialTimedReadNum(&keycode, &terminator, true);
+    if (rc) {
+      Serial.println("Timeout reading keycode");
+      return;
+    } else if (!(terminator == ' ' || terminator == ';')) {
+      Serial.println("No terminator after keycode");
+      return -1;      
+    }
+
+    Serial.print("Read modifier ");
+    serialPrintHex(modifier);
+    Serial.print(" ");
+
+    Serial.print("keycode ");
+    serialPrintHex(keycode);
+    Serial.println();
+
+    EEPROM.update(EEPROM_OFFSET(pin) + (keystrokeIdx * 2), modifier);
+    EEPROM.update(EEPROM_OFFSET(pin) + (keystrokeIdx * 2) + 1, keycode);
+    keystrokeIdx++;    
+  }  
+
+  if (keystrokeIdx < MAX_KEYSTROKES - 1)
+    EEPROM.update(EEPROM_OFFSET(pin) + (keystrokeIdx * 2), 0);
+    EEPROM.update(EEPROM_OFFSET(pin) + (keystrokeIdx * 2) + 1, 0);  
+
+  Serial.println("Updated keycode, reloaded config");
+  readAndProcessConfig();
+}
+
+
 void serialEvent() {
-  if (Serial.available()) {         // judge whether the data has been received
-    inChar = Serial.read();         // read one character
+  if (Serial.available()) {         
+    inChar = Serial.read();         
 
-    Serial.print("UNO received:");  // print the string "UNO received:"
-    Serial.println(inChar);         // print the received character
+    // Serial.print("Received: ");  
+    // Serial.println(inChar);         
 
-    if (inChar == 's') {
-      // Send a keystroke, the actual key data should never 
-      // appear in the console since it will become a HID key
-      Serial.print("key:");       // print the string "key:"
-      sendKey(0x00, 0x1d, 0);
-      Serial.println(""); 
-    } else if (inChar == 'i') {
-      // Send an incomplete keystroke to show it doesn't block
-      Serial.print("incomplete: ");       // print the string "key:"
-      Serial.write(message, sizeof(message) - 1);
-      delay(500);
-      Serial.println(""); 
-      Serial.println("done");
+    switch (inChar) {
+      case 's':
+        // Send a keystroke, the actual key data should never 
+        // appear in the console since it will become a HID key
+        Serial.print("key:");       // print the string "key:"
+        sendKey(0x00, 0x1d, 0);
+        Serial.println(""); 
+        break;
+      case 'S':
+        // Send all major keys to the Keyboard USB device
+        sendAllMajorKeys();
+        break;
+      case 'i':
+        // Send an incomplete keystroke to show it doesn't block
+        Serial.print("incomplete: ");       // print the string "key:"
+        Serial.write(keyboardMessage, 7);
+        delay(500);
+        Serial.println(""); 
+        Serial.println("done");
+        break;
+      case 'd':
+        // Dump ascii char to keycode data
+        printAsciiToKey();
+        break;
+      case 'F':
+        // Format EEPROM then re-read config
+        formatEeprom();
+      case 'l':
+        // Read and list config
+        readAndProcessConfig();
+        break;
+      case 'u':
+        // Update a pin to trigger some keystrokes
+        readPinUpdate();
+        break;        
+      case '\n':
+      case '\r':
+      case ' ':
+        // Ignore whitespace
+        break;
+      default:
+        Serial.print(F("Unknown command '"));
+        Serial.print(inChar);
+        Serial.println("");
     }
   }
 }
