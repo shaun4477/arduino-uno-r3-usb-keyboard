@@ -18,7 +18,7 @@ F_CPU = 16000000
 
 #MCU          = at90usb1287
 ARCH         = AVR8
-BOARD        = USER
+BOARD        = UNO
 #F_CPU        = 8000000
 F_USB        = $(F_CPU)
 OPTIMIZATION = s

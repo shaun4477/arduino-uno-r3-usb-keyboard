@@ -19,7 +19,7 @@ char inChar;        // character received from serial port
 static char *all_major_char_str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#%^&*!*()\t -_=+[]{}\\|`~;:'\",.<>/?";
 
 void setup() {
-  Serial.begin(9600);                 // initialize serial port and set baud rate to 9600
+  Serial.begin(115200);                 // initialize serial port and set baud rate to 9600
 
   Serial.println(F("Arduino keyboard sender (https://github.com/shaun4477/arduino-uno-r3-usb-keyboard)"));
   readAndProcessConfig();
@@ -296,7 +296,7 @@ void serialEvent() {
       default:
         Serial.print(F("Unknown command '"));
         Serial.print(inChar);
-        Serial.println("");
+        Serial.println("'");
     }
   }
 }

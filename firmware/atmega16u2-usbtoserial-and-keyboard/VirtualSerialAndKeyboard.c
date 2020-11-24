@@ -65,10 +65,42 @@ static inline uint8_t RingBuffer_Peek_Ahead(RingBuffer_t* const Buffer, uint8_t 
 	return *(Buffer->Start + (((Buffer->Out - Buffer->Start) + ahead) % Buffer->Size));
 }
 
-#define USBSerialConnected() (!(AVR_RESET_LINE_PORT & AVR_RESET_LINE_MASK))
+#define USB_SERIAL_CONNECTED() ((!(AVR_RESET_LINE_PORT & AVR_RESET_LINE_MASK)) && USB_DeviceState == DEVICE_STATE_Configured)
 
 #define BUFFER_SIZE 128
 #define BUFFER_ALMOST_FULL 96
+
+#define DEFAULT_SERIAL_BAUD_RATE 115200
+// #define DEFAULT_SERIAL_BAUD_RATE 115200
+// #define DEFAULT_SERIAL_BAUD_RATE 230400
+
+/* Different clock speed and baud rate combinations end up with different 
+* rates of transmission error due to the imperfect output baud rate to 
+* system clock ratio and how that affects the receiver's asynchronous clock recovery. 
+* 'Double speed' always results in a smaller error during transmission, but 
+* at the cost of less accuracy during receiving due to less samples for 
+* clock recovery. See the data sheet for more information */
+#define DEFAULT_SERIAL_DOUBLE_SPEED (DEFAULT_SERIAL_BAUD_RATE > 115200) 
+#define DEFAULT_SERIAL_DOUBLE_SPEED (1)
+
+/** Debug USB communications by sending data over the UART channel */
+#define DEBUG_USB
+#ifdef DEBUG_USB
+static inline void USB_Debug(const char DataByte) ATTR_ALWAYS_INLINE;
+// Blocking send, set baud rate high 
+static inline void USB_Debug(const char DataByte) { 
+	// Wait until ready for a new byte
+	while (!(UCSR1A & (1 << UDRE1))) {};
+	// Clear bit indicating if byte sent
+	UCSR1A |= (1 << TXC1);
+	UDR1 = DataByte;
+	// Wait for byte to send
+	while (!(UCSR1A & (1 << TXC1))) {};
+}
+#else
+static inline void USB_Debug(const char DataByte) ATTR_ALWAYS_INLINE;
+static inline void USB_Debug(const char DataByte) { }
+#endif
 
 /** Circular buffer to hold data from the host before it is sent to the device via the serial port. */
 static RingBuffer_t USBtoUSART_Buffer;
@@ -94,6 +126,15 @@ volatile struct
 /** Toggle the RX LED periodically after X USB message processing loops. Used to show that USB messages
 * are still being processed */
 #define USB_TASK_FLASH_RX_LED 20000 
+
+static volatile uint8_t      timer_1_overflows = 0;
+
+uint8_t      tx_ticks = 0;
+
+/** If 4 CAPSLOCK signals come in within 3 timer 1 overflows, send a message to serial */
+static uint8_t      capslock_countdown = 0;
+static uint8_t      capslock_count = 0;
+static uint8_t      capslock_trigger = 0;
 
 // #define PULSE
 
@@ -167,6 +208,12 @@ USB_ClassInfo_HID_Device_t Keyboard_HID_Interface =
 			},
 	};
 
+static inline uint8_t tx_tick_down(uint8_t ticks) {
+	tx_ticks = ticks;
+	LEDs_TurnOnLEDs(LEDMASK_TX);
+	return 1;
+}
+
 /** Main program entry point. This routine contains the overall program flow, including initial
  *  setup of all components and the main program loop.
  */
@@ -228,7 +275,7 @@ int main(void)
 			* check if a packet is already enqueued to the host - if so, we shouldn't try to send more 
 			* data until it completes as there is a chance nothing is listening and a lengthy timeout 
 			* could occur */
-			if (!USBSerialConnected()) {
+			if (!USB_SERIAL_CONNECTED()) {
 				while (BufferCount--) {
 					RingBuffer_Remove(&USARTtoUSB_Buffer);
 					Keyboard_Send_Detector_Matched = 0;
@@ -278,6 +325,7 @@ int main(void)
 		/* Load the next byte from the USART transmit buffer into the USART if transmit buffer space is available */
 		if (Serial_IsSendReady() && !(RingBuffer_IsEmpty(&USBtoUSART_Buffer))) {
 			Serial_SendByte(RingBuffer_Remove(&USBtoUSART_Buffer));
+			LEDs_TurnOnLEDs(LEDMASK_TX);
 #ifdef PULSE
 			LEDs_TurnOnLEDs(LEDMASK_RX);
 			PulseMSRemaining.RxLEDPulse = TX_RX_LED_PULSE_TICKS;
@@ -287,6 +335,10 @@ int main(void)
 		CDC_Device_USBTask(&VirtualSerial_CDC_Interface);
 		HID_Device_USBTask(&Keyboard_HID_Interface);
 		USB_USBTask();
+
+#ifdef INTERRUPT_CONTROL_ENDPOINT
+#error Interrupt driven control endpoints are less reliable
+#endif
 
 #ifdef USB_TASK_FLASH_RX_LED
 		UsbProcessed++;
@@ -376,20 +428,27 @@ void SetupHardware(void)
 	/* Hardware Initialization */
 
 	/* Listen for Serial communication immediately */
-	Serial_Init(9600, false);
-
+	Serial_Init(DEFAULT_SERIAL_BAUD_RATE, DEFAULT_SERIAL_DOUBLE_SPEED);
+	
 	LEDs_Init();
+
+	USB_Debug('S'); // Tell any serial listener we're debugging the USB connection 
+	USB_Debug('T'); // Tell any serial listener we're debugging the USB connection 
+	USB_Debug('A'); // Tell any serial listener we're debugging the USB connection 
+	USB_Debug('R'); // Tell any serial listener we're debugging the USB connection 
+	USB_Debug('T'); // Tell any serial listener we're debugging the USB connection 
 	USB_Init();
 
 	/* Use TIMER1 for 'I'm still alive messages'. 
-	   Set with pre-scale of 1024 so it ticks every 16000000/256 seconds.
+	   Set with pre-scale of X so it ticks every 16000000/X seconds.
 	   Since the timer is 16 bits wide, it will overflow 
-	   every 1/(16000000/256)*(2^16) = 1.048576 seconds or so */
+	   every 1/(16000000/X)*(2^16) seconds */
 	TCNT1 = 0;
 	TIFR1 |= (1<<OCF1A) ; // Clear timer1 overflow flag and prepare for next overflow
-	// TCCR1B = (1<<CS11);  // (Clock / 8)   = 1/(16000000/8)*(2^16)   = 0.032768 seconds overflow
-	// TCCR1B = (1<<CS10);  // (Clock)       = 1/(16000000/1)*(2^16)   = 0.004096 seconds overflow
-	TCCR1B = (1<<CS12);  // (Clock / 256) = 1/(16000000/256)*(2^16) = 1.048576 seconds overflow
+	// TCCR1B = (1<<CS10);               // (Clock)       = 1/(16000000/1)*(2^16)   = 0.004096 seconds overflow
+	// TCCR1B = (1<<CS11);              // (Clock / 8)   = 1/(16000000/8)*(2^16)   = 0.032768 seconds overflow
+	// TCCR1B = (1<<CS11) | (1<<CS10);  // (Clock / 64)  = 1/(16000000/64)*(2^16)  = 0.262144 seconds overflow
+	TCCR1B = (1<<CS12);              // (Clock / 256) = 1/(16000000/256)*(2^16) = 1.048576 seconds overflow
 
 	/* Enable the TIMER1 overflow interrupt so we get an interrupt on each overflow of TIMER1 */
 	TIMSK1 = (1 << TOIE1); 
@@ -418,22 +477,25 @@ ISR(TIMER1_OVF_vect, ISR_BLOCK)
 	TCNT1 = 0;
 	TIFR1 |= (1<<OCF1A) ; // Clear timer1 overflow flag 
 
-	/* Toggle the LED to show we're still here */
-	// LEDs_ToggleLEDs(LEDMASK_TX);
+	timer_1_overflows++;
 
-	/* Send a key to the keyboard HID */
-	// RingBuffer_Insert(&Keyboard_Buffer, HID_KEYBOARD_SC_B);
+	if (tx_ticks && !--tx_ticks)
+		LEDs_TurnOffLEDs(LEDMASK_TX);
+
+        // USB_Debug('T'); // Tell any listener the timer has gone off 
 }
 
 /** Event handler for the library USB Connection event. */
 void EVENT_USB_Device_Connect(void)
 {
+	USB_Debug('o');
 	// LEDs_SetAllLEDs(LEDMASK_USB_ENUMERATING);
 }
 
 /** Event handler for the library USB Disconnection event. */
 void EVENT_USB_Device_Disconnect(void)
 {
+	USB_Debug('D');
 	// LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
 }
 
@@ -442,21 +504,33 @@ void EVENT_USB_Device_ConfigurationChanged(void)
 {
 	bool ConfigSuccess = true;
 
-	ConfigSuccess &= CDC_Device_ConfigureEndpoints(&VirtualSerial_CDC_Interface);
+	USB_Debug('C'); // Tell any listener a configuration has happened
+
 	ConfigSuccess &= HID_Device_ConfigureEndpoints(&Keyboard_HID_Interface);
+	ConfigSuccess &= CDC_Device_ConfigureEndpoints(&VirtualSerial_CDC_Interface);
 
 	// Fire the USB Start of Frame event once every millisecond in sync with the USB bus
 	USB_Device_EnableSOFEvents();
 
+	// USB_Device_SendRemoteWakeup();
 	// LEDs_SetAllLEDs(LEDMASK_TX|LEDMASK_RX);
 	// LEDs_SetAllLEDs(ConfigSuccess ? LEDMASK_USB_READY : LEDMASK_USB_ERROR);
 }
 
+// #ifdef USB_CAN_BE_DEVICE
+// #error Device mode OK
+// #endif
+
 /** Event handler for the library USB Control Request reception event. */
 void EVENT_USB_Device_ControlRequest(void)
 {
-	CDC_Device_ProcessControlRequest(&VirtualSerial_CDC_Interface);
+	/* tx_tick_down(3); */
+	USB_Debug('c'); // Tell any listener a control request has happened
+	USB_Debug(USB_ControlRequest.bmRequestType);
+	USB_Debug(USB_ControlRequest.bRequest);
+	
 	HID_Device_ProcessControlRequest(&Keyboard_HID_Interface);
+	CDC_Device_ProcessControlRequest(&VirtualSerial_CDC_Interface);
 }
 
 /** Event handler for the USB device Start Of Frame event. */
@@ -487,6 +561,8 @@ ISR(USART1_RX_vect, ISR_BLOCK)
  */
 void EVENT_CDC_Device_ControLineStateChanged(USB_ClassInfo_CDC_Device_t* const CDCInterfaceInfo)
 {
+	USB_Debug('l'); // Tell any listener a control line state change has happened
+
 	/* Check state of Data Terminal Ready (DTR) 
 	   When the Arduino IDE serial monitor / avrdude etc connects it will assert DTR and keep 
 	   it high. When it disconnects it will go low. */
@@ -498,11 +574,11 @@ void EVENT_CDC_Device_ControLineStateChanged(USB_ClassInfo_CDC_Device_t* const C
 	if (CurrentDTRState) {
 		/* Send reset line low, will cause the atmega328p to reset */
 		AVR_RESET_LINE_PORT &= ~AVR_RESET_LINE_MASK;
-		LEDs_TurnOnLEDs(LEDMASK_TX); // Show we are ready to communicate with the atmega328p
+		// LEDs_TurnOnLEDs(LEDMASK_TX); // Show we are ready to communicate with the atmega328p
 	} else {
 		/* Take reset line high */
 		AVR_RESET_LINE_PORT |= AVR_RESET_LINE_MASK;
-		LEDs_TurnOffLEDs(LEDMASK_TX); // Show we are not connected right now 
+		// LEDs_TurnOffLEDs(LEDMASK_TX); // Show we are not connected right now 
 	}
 }
 
@@ -513,6 +589,8 @@ void EVENT_CDC_Device_ControLineStateChanged(USB_ClassInfo_CDC_Device_t* const C
 void EVENT_CDC_Device_LineEncodingChanged(USB_ClassInfo_CDC_Device_t* const CDCInterfaceInfo)
 {
 	uint8_t ConfigMask = 0;
+
+	USB_Debug('L'); // Tell any listener a line encoding change happened 
 
 	switch (CDCInterfaceInfo->State.LineEncoding.ParityType)
 	{
@@ -540,27 +618,60 @@ void EVENT_CDC_Device_LineEncodingChanged(USB_ClassInfo_CDC_Device_t* const CDCI
 			break;
 	}
 
+	USB_Debug(UCSR1C);
+	USB_Debug(ConfigMask);
+
+	USB_Debug(*((uint8_t *) &CDCInterfaceInfo->State.LineEncoding.BaudRateBPS + 1));
+	USB_Debug(*((uint8_t *) &CDCInterfaceInfo->State.LineEncoding.BaudRateBPS));
+
+	USB_Debug(UBRR1H);
+	USB_Debug(UBRR1L);
+	/* Special case 57600 baud for compatibility with the ATmega328 bootloader. */	
+	uint16_t newUBRR1 = (CDCInterfaceInfo->State.LineEncoding.BaudRateBPS == 57600) ?
+		SERIAL_UBBRVAL(CDCInterfaceInfo->State.LineEncoding.BaudRateBPS) :
+		SERIAL_2X_UBBRVAL(CDCInterfaceInfo->State.LineEncoding.BaudRateBPS);
+	USB_Debug(*((uint8_t *) &newUBRR1 + 1));
+	USB_Debug(*(uint8_t *) &newUBRR1);
+
+	USB_Debug(UCSR1A);
+	uint8_t newUCSR1A = (CDCInterfaceInfo->State.LineEncoding.BaudRateBPS == 57600) ? 0 : (1 << U2X1);
+	USB_Debug(newUCSR1A);
+
+#if 1
+	GlobalInterruptDisable();
+
 	/* Keep the TX line held high (idle) while the USART is reconfigured */
+	DDRD  |= (1 << 3);
 	PORTD |= (1 << 3);
+
+	uint8_t oldUBRR1 = UBRR1;
+	uint8_t oldUCSR1C = UCSR1C;
+	uint8_t oldUCSR1A = UCSR1A;
+	uint8_t oldUCSR1B = UCSR1B;
 
 	/* Must turn off USART before reconfiguring it, otherwise incorrect operation may occur */
 	UCSR1B = 0;
 	UCSR1A = 0;
 	UCSR1C = 0;
 
-	/* Special case 57600 baud for compatibility with the ATmega328 bootloader. */	
-	UBRR1  = (CDCInterfaceInfo->State.LineEncoding.BaudRateBPS == 57600)
-			 ? SERIAL_UBBRVAL(CDCInterfaceInfo->State.LineEncoding.BaudRateBPS)
-			 : SERIAL_2X_UBBRVAL(CDCInterfaceInfo->State.LineEncoding.BaudRateBPS);	
+	UBRR1  = newUBRR1;
 
 	UCSR1C = ConfigMask;
-	UCSR1A = (CDCInterfaceInfo->State.LineEncoding.BaudRateBPS == 57600) ? 0 : (1 << U2X1);
+	UCSR1A = newUCSR1A;
 
-	/* Switch on send and receive (with interrupts) */
-	UCSR1B = ((1 << RXCIE1) | (1 << TXEN1) | (1 << RXEN1));
+	/* Switch on send and receive (without interrupts for now) */
+	UCSR1B = ((1 << TXEN1) | (1 << RXEN1));
 
 	/* Release the TX line after the USART has been reconfigured */
 	PORTD &= ~(1 << 3);
+#endif
+
+	USB_Debug('I');
+
+	/* Enable receive interrupts */
+	UCSR1B |= (1 << RXCIE1);
+
+	GlobalInterruptEnable();
 }
 
 /** HID class driver callback function for the creation of HID reports to the host.
@@ -605,20 +716,8 @@ void CALLBACK_HID_Device_ProcessHIDReport(USB_ClassInfo_HID_Device_t* const HIDI
 					  const void* ReportData,
 					  const uint16_t ReportSize)
 {
-#if 0
-	uint8_t  LEDMask   = LEDS_NO_LEDS;
-	uint8_t* LEDReport = (uint8_t*)ReportData;
+	USB_Debug('P'); // Tell any listener a process HID report event happened
 
-	if (*LEDReport & HID_KEYBOARD_LED_NUMLOCK)
-	  LEDMask |= LEDS_LED1;
-
-	if (*LEDReport & HID_KEYBOARD_LED_CAPSLOCK)
-	  LEDMask |= LEDS_LED3;
-
-	if (*LEDReport & HID_KEYBOARD_LED_SCROLLLOCK)
-	  LEDMask |= LEDS_LED4;
-
-	LEDs_SetAllLEDs(LEDMask);
-#endif
+	/* Unfortunately Mac OS does not send any of these */
 }
 
