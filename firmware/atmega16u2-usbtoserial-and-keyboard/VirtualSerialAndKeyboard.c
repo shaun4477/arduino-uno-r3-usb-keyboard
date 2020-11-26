@@ -131,11 +131,6 @@ static volatile uint8_t      timer_1_overflows = 0;
 
 uint8_t      tx_ticks = 0;
 
-/** If 4 CAPSLOCK signals come in within 3 timer 1 overflows, send a message to serial */
-static uint8_t      capslock_countdown = 0;
-static uint8_t      capslock_count = 0;
-static uint8_t      capslock_trigger = 0;
-
 // #define PULSE
 
 /** Circular buffer to hold data to be sent from the Keyboard HID to the host */
@@ -618,36 +613,41 @@ void EVENT_CDC_Device_LineEncodingChanged(USB_ClassInfo_CDC_Device_t* const CDCI
 			break;
 	}
 
+	/* Debug old and new masks */
 	USB_Debug(UCSR1C);
 	USB_Debug(ConfigMask);
 
+	/* Debug new baud rate */
 	USB_Debug(*((uint8_t *) &CDCInterfaceInfo->State.LineEncoding.BaudRateBPS + 1));
 	USB_Debug(*((uint8_t *) &CDCInterfaceInfo->State.LineEncoding.BaudRateBPS));
 
+	/* Debug old baud rate config */
 	USB_Debug(UBRR1H);
 	USB_Debug(UBRR1L);
+
 	/* Special case 57600 baud for compatibility with the ATmega328 bootloader. */	
 	uint16_t newUBRR1 = (CDCInterfaceInfo->State.LineEncoding.BaudRateBPS == 57600) ?
 		SERIAL_UBBRVAL(CDCInterfaceInfo->State.LineEncoding.BaudRateBPS) :
 		SERIAL_2X_UBBRVAL(CDCInterfaceInfo->State.LineEncoding.BaudRateBPS);
+
+	/* Debug new baud rate config */
 	USB_Debug(*((uint8_t *) &newUBRR1 + 1));
 	USB_Debug(*(uint8_t *) &newUBRR1);
 
+	/* Debug flags / double speed config, old and new */
 	USB_Debug(UCSR1A);
 	uint8_t newUCSR1A = (CDCInterfaceInfo->State.LineEncoding.BaudRateBPS == 57600) ? 0 : (1 << U2X1);
 	USB_Debug(newUCSR1A);
 
+	/* Debug switching UART configs, if the baud rate changes you'll need to 
+        * update logic analyzer traces etc here */
+	USB_Debug('*');
 #if 1
 	GlobalInterruptDisable();
 
 	/* Keep the TX line held high (idle) while the USART is reconfigured */
 	DDRD  |= (1 << 3);
 	PORTD |= (1 << 3);
-
-	uint8_t oldUBRR1 = UBRR1;
-	uint8_t oldUCSR1C = UCSR1C;
-	uint8_t oldUCSR1A = UCSR1A;
-	uint8_t oldUCSR1B = UCSR1B;
 
 	/* Must turn off USART before reconfiguring it, otherwise incorrect operation may occur */
 	UCSR1B = 0;

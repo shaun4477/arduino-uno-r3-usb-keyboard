@@ -20,7 +20,7 @@ static char *all_major_char_str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrs
 
 void setup() {
   Serial.begin(115200);                 // initialize serial port and set baud rate to 9600
-
+  //Serial.begin(9600);
   Serial.println(F("Arduino keyboard sender (https://github.com/shaun4477/arduino-uno-r3-usb-keyboard)"));
   readAndProcessConfig();
     
