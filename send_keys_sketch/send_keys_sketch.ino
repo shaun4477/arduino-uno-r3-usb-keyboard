@@ -1,12 +1,13 @@
 /*
   Demonstrate using the the atmega16u2-usbtoserial-and-keyboard firmware 
-  on the atmega16u2 in the Arduino Uno R3 to both have a serial console 
+  on the atmega16u2 in the Arduino Uno R3 to have both a serial console 
   that can be used in sketches and to load new sketches from the Arduino 
   IDE as well as sending keyboard codes via the USB Keyboard HID 
 
-  This sketch allows you to program input pins 2-7 so that when they
-  are pulled to ground they will send up to 64 keystrokes via USB 
-  HID. By default input pin 7 will send the string 'Hello World!'
+  This sketch allows you to program input pins 2-7 through the serial 
+  console so that when they can be used with buttons and when they are 
+  pulled to ground they will send up to 64 keystrokes via USB HID. By 
+  default input pin 7 will send the string 'Hello World!'
 */
 
 #include <EEPROM.h>
@@ -21,6 +22,7 @@ static char *all_major_char_str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrs
 void setup() {
   Serial.begin(115200);                 // initialize serial port and set baud rate to 9600
   //Serial.begin(9600);
+
   Serial.println(F("Arduino keyboard sender (https://github.com/shaun4477/arduino-uno-r3-usb-keyboard)"));
   readAndProcessConfig();
     

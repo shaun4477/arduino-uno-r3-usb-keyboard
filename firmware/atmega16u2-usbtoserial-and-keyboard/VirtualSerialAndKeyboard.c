@@ -7,19 +7,19 @@
  *  device that can transparently convert events embedded in the serial 
  *  output stream in to HID reports to the host. It can be used 
  *  as a firmware compatible with the Arduino programming environment 
- *  for the U3 while also letting Arduino programs send virtual 
+ *  for the R3 while also letting Arduino programs send virtual 
  *  keyboard events. 
  *  
  *  To communicate serially we expect DTR to be asserted by the USB 
  *  host. In this mode we first reset the atmega328p by switching 
  *  Pin7 on PORTD from high to low. We then copy all incoming/outgoing
  *  bytes in both directions (except for keyboard events which are 
- *  transparently intercepted). If USB host does not have DTR asserted
- *  and we receive serial bytes (except embedded keyboard events), we 
- *  drop them
+ *  transparently intercepted). If the USB host does not have DTR 
+ *  asserted and we receive serial bytes (except embedded keyboard 
+ *  events), we drop them
  *
- *  It's based on the VirtualSerial demo from the LUFA library by Dean 
- *  Camera, the USBtoSerial project from LUFA and the 
+ *  This code is based on the VirtualSerial demo from the LUFA library 
+ *  by Dean Camera, the USBtoSerial project from LUFA and the 
  *  Arduino-usbserial.c file from the ArduinoCore-avr source code 
  *  (which doesn't have a copyright attribution except the one for LUFA / 
  *  Dean Camera)
@@ -80,10 +80,14 @@ static inline uint8_t RingBuffer_Peek_Ahead(RingBuffer_t* const Buffer, uint8_t 
 * 'Double speed' always results in a smaller error during transmission, but 
 * at the cost of less accuracy during receiving due to less samples for 
 * clock recovery. See the data sheet for more information */
-#define DEFAULT_SERIAL_DOUBLE_SPEED (DEFAULT_SERIAL_BAUD_RATE > 115200) 
 #define DEFAULT_SERIAL_DOUBLE_SPEED (1)
 
-/** Debug USB communications by sending data over the UART channel */
+/** Debug USB communications by sending data over the UART channel. This is 
+* useful when debugging because you can connect the RX of a USB-to-UART adaptor 
+* to the RX header on the Uno board and 'sniff' debug bytes sent from the 
+* atmega16u2. The debug stream is blocking, use a high baud rate and remember
+* that the baud rate will change to whatever the USB host is using when it 
+* connects to the device (e.g. in a serial monitor connection) */ 
 #define DEBUG_USB
 #ifdef DEBUG_USB
 static inline void USB_Debug(const char DataByte) ATTR_ALWAYS_INLINE;
@@ -203,6 +207,7 @@ USB_ClassInfo_HID_Device_t Keyboard_HID_Interface =
 			},
 	};
 
+/* Light the TX LED then turn it off in X timer1 overflows */
 static inline uint8_t tx_tick_down(uint8_t ticks) {
 	tx_ticks = ticks;
 	LEDs_TurnOnLEDs(LEDMASK_TX);
@@ -484,14 +489,12 @@ ISR(TIMER1_OVF_vect, ISR_BLOCK)
 void EVENT_USB_Device_Connect(void)
 {
 	USB_Debug('o');
-	// LEDs_SetAllLEDs(LEDMASK_USB_ENUMERATING);
 }
 
 /** Event handler for the library USB Disconnection event. */
 void EVENT_USB_Device_Disconnect(void)
 {
 	USB_Debug('D');
-	// LEDs_SetAllLEDs(LEDMASK_USB_NOTREADY);
 }
 
 /** Event handler for the library USB Configuration Changed event. */
