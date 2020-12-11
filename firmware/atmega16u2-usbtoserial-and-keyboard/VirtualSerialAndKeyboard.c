@@ -337,7 +337,7 @@ int main(void)
 		USB_USBTask();
 
 #ifdef INTERRUPT_CONTROL_ENDPOINT
-#error Interrupt driven control endpoints are less reliable
+// #error Interrupt driven control endpoints are less reliable
 #endif
 
 #ifdef USB_TASK_FLASH_RX_LED
@@ -721,6 +721,11 @@ void CALLBACK_HID_Device_ProcessHIDReport(USB_ClassInfo_HID_Device_t* const HIDI
 {
 	USB_Debug('P'); // Tell any listener a process HID report event happened
 
-	/* Unfortunately Mac OS does not send any of these */
+	/* Unfortunately Mac OS does not send any of these unless:
+         * - You install Karabiner Elements and enable the 'manipulate LEDs' functionality 
+         *   for the relevant keyboard device
+         * - You use the virtual on screen keyboard. To do so open System Preferences >
+	 *   Keyboard. Enable 'Show keyboard ... viewers in menu bar'. Open the 
+         *   menu bar icon and choose 'Show Keyboard Viewer' */
 }
 
